@@ -1,108 +1,75 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
-
-img = Image.open("dev.png")
-M = img.load()
-
-size0, size1 = img.size
-m = size0 * size1 * (size0 * size1 - 1) // 2
-n = 1000
+from sklearn.decomposition import PCA
+from sklearn import linear_model
 
 
-K = []
-a = 0
-b = 0
-for i in range(n):
-    if a == b:
-        K.append([a, b])
-        a += 1
-        b = 0
-    else:
-        K.append([b, a])
-        K.append([a, b])
-        b += 1
+def read_csv(filename: str):
+    with open(filename, "r") as input_file:
+        arr = [line.split(",") for line in input_file if len(line) > 0]
+    return arr
 
-X_train = []
-X = []
-
-y_train = np.array([])
-
-for i in range(size0 * size1 - 1):
-    j = i + 1
-    while j < size0 * size1:
-        u = np.ones((n, 1))
-        u2 = np.ones((n, 1))
-        for l in range(n):
-            u[l] = (np.cos((i % size0) / (size0 - 1) * K[l][0]) * np.pi) * np.cos((i // size0) / (size1 - 1) * K[l][1] * np.pi)
-            u2[l] = (np.cos((j % size0) / (size0 - 1) * K[l][0]) * np.pi) * np.cos((j // size0) / (size1 - 1) * K[l][1] * np.pi)
-        X_train.append(u - u2)
-        if M[i % size0, i // size0][0] > M[j % size0, j // size0][0]:
-            y_train = np.append(y_train, 1)
-        else:
-            y_train = np.append(y_train, 0)
-        j += 1
-
-for i in range(size0 * size1):
-    j = i + 1
-    u = np.ones((n, 1))
-    for l in range(n):
-        u[l] = (np.cos((i % size0) / (size0 - 1) * K[l][0]) * np.pi) * np.cos((i // size0) / (size1 - 1)  * K[l][1] * np.pi)
-    X.append(u)
-
-X = np.array(X)
-X_train = np.array(X_train)
-
-def log_loss(y_true, y_pred):
-    return -np.sum(y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred), axis=0) / len(y_true)
 
 def sigmoid(z):
     return 1 / (1 + np.exp(-z))
 
-class LogisticRegression:
 
-    def __init__(self):
-        self.losses_train = []
-        self.w = np.random.randn(n, 1) * 0.001
+def predict(X, w, n):
+    y_pred = np.array([sigmoid(x.reshape(1, n).dot(w)) for x in X])
+    return y_pred.flatten()
 
-    def train_vec(self, X, y, learningRate=0.005):
-        T = 0
-        while log_loss(y, self.predict(X)) > 0.5:
-            Z = X.reshape(m, n).dot(self.w)
-            A = sigmoid(Z)
 
-            dw = np.sum(X.reshape(m, n) * (A.reshape(m, 1) - y.reshape(m, 1)), axis=0) / len(X)
+def function(img, number_basis):
+    M = img.load()
+    size0, size1 = img.size
+    m = size0 * size1 * (size0 * size1 - 1) // 2 // size0
+    couples = size0 * size1 * (size0 * size1 - 1) // 2
+    if number_basis == 1:
+        K = [[j, i - j] if i % 2 == 0 else [i - j, j] for i in range(size0 * size1) for j in range(i + 1)]
+        basis = [[(np.cos((i % size0) / (size0 - 1) * K[l][0]) * np.pi) * np.cos((i // size0) / (size1 - 1) * K[l][1]
+                                                                                 * np.pi)
+                  for i in range(size0 * size1)] for l in range(size0 * size1)]
 
-            self.w = self.w - learningRate * dw.reshape(n, 1)
-            T += 1
-        print(log_loss(y, self.predict(X)), T)
-    def predict(self, X):
-        return np.array([sigmoid(x.reshape(1, n).dot(self.w))[0][0] for x in X])
+    if number_basis == 2:
+        basis = read_csv('basisYale32.csv')
+        basis = np.array(list(map(lambda x: np.array(list(map(lambda y: int(y), basis[x[0]]))),
+                                  enumerate(basis))))
 
-logreg = LogisticRegression()
-logreg.train_vec(X_train, y_train)
+    n = int(len(basis[0]) * 1)
+    pca = PCA(n)
+    x_test = pca.fit_transform(np.transpose(basis))
+    print('Доля информации: ', sum(pca.explained_variance_ratio_))
 
-prediction = np.array(logreg.predict(X))
+    colors = np.array([M[i % size0, i // size0] for i in range(size0 * size1)])
 
-max = prediction[0]
-for i in range(size0 * size1):
-    if max < prediction[i]:
-        max = prediction[i]
+    x_train, y_train = [], []
+    while len(x_train) < m:
+        i, j = np.random.choice(size1 * size0, 2, replace=False)
+        x_train.append(x_test[i] - x_test[j])
+        y_train.append(int(colors[i] > colors[j]))
+    x_train, y_train = np.array(x_train), np.array(y_train)
 
-min = prediction[0]
-for i in range(size0 * size1):
-    if min > prediction[i]:
-        min = prediction[i]
+    reg = linear_model.LinearRegression()
+    reg.fit(x_train, y_train)
+    prediction = predict(x_test, reg.coef_, n)
 
-r = 255 / (max - min)
+    min_img_color = min(colors)
+    max_img_color = max(colors)
+    max_prediction_value = max(prediction)
+    min_prediction_value = min(prediction)
+    prediction = [(pix - min_prediction_value) * (max_img_color - min_img_color)
+                  / (max_prediction_value - min_prediction_value) + min_img_color for pix in prediction]
+    faithful_couples = sum((colors[i] - colors[j]) * (prediction[i] - prediction[j]) >= 0
+                           for i in range(len(prediction) - 1) for j in range(i + 1, len(prediction)))
+    print("Точность предсказаний: ", faithful_couples / couples * 100, "%")
 
-for i in range(size0 * size1):
-    prediction[i] = (prediction[i] - min) * r
+    prediction = np.array(prediction, dtype=int).reshape((size1, size0))
+    prediction = [[[pix, pix, pix] for pix in row] for row in prediction.tolist()]
+    plt.imshow(prediction, interpolation='none')
+    plt.show()
 
-tp = np.zeros((size1, size0, 3), np.uint8)
-for i in range(size1):
-    for j in range(size0):
-        tp[i][j] = (prediction[i * size0 + j], prediction[i * size0 + j], prediction[i * size0 + j])
 
-plt.imshow(tp, interpolation='none')
-plt.show()
+img = Image.open("yale32.pgm")
+number_basis = 2  # 1 - Фурье-базис, 2 - базис по БД лиц
+function(img, number_basis)
